@@ -2,21 +2,23 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Stadium Bets - Apuestas en Vivo</title>
+    <link rel="icon" type="image/png" href="images/icono.png">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header class="header">
             <div class="header-left">
-                <h1 class="app-title">Stadium Bets</h1>
-                <p class="app-subtitle">Apuestas Disponibles</p>
+                <img src="images/banner.png" alt="Stadium Bets" class="header-banner">
             </div>
             <div class="header-right">
                 <span class="welcome-msg" id="welcome"></span>
                 <span class="clock" id="clock"></span>
-                <button class="btn btn-logout" id="btnLogout">Salir</button>
+                <div class="logout-container">
+                    <button class="btn btn-logout" id="btnLogout">Salir</button>
+                </div>
             </div>
         </header>
 
@@ -44,6 +46,12 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script>
+        document.addEventListener('gesturestart', function(e) { e.preventDefault(); });
+        document.addEventListener('dblclick', function(e) { e.preventDefault(); });
+    </script>
+    <script src="funciones/verificacion.js"></script>
+    <script src="funciones/sesion.js"></script>
     <script src="funciones/bets.js"></script>
 </body>
 </html>

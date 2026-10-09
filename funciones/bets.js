@@ -1,12 +1,7 @@
-const SUPABASE_URL = 'https://qbazuxfrctslfecvhcgf.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_nYuymJruu67P9LMKihq81A_8LKBmbJo';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
 let apuestasData = [];
+let idsHechasCache = [];
 let currentApuesta = null;
 let apostadorActual = null;
-
-const SESSION_KEY = 'stadium_bets_apostador';
 
 function formatPeso(valor) {
     const entero = Math.floor(valor);
@@ -27,6 +22,9 @@ function updateClock() {
 
 function getNombreCompleto(apostador) {
     if (!apostador) return '';
+    if (apostador.datos && typeof apostador.datos === 'object') {
+        return apostador.datos.nombre || '';
+    }
     if (apostador.nombre && typeof apostador.nombre === 'object') {
         return `${apostador.nombre.nombre || ''} ${apostador.nombre.apellido || ''}`.trim();
     }
@@ -40,14 +38,28 @@ function updateWelcome() {
     }
 }
 
-function getEstadoTexto(estado) {
+function getEstadoTexto(estado, apostada, resultado) {
+    if (resultado === 'Cumplida') return 'Ganada';
+    if (resultado === 'No cumplida') return 'Perdida';
     if (estado === 'cerrada') return 'Estado: CERRADA';
+    if (apostada) return 'Apostado';
     return 'Estado: ACTIVA';
 }
 
-function getEstadoClase(estado) {
+function getEstadoClase(estado, apostada, resultado) {
+    if (resultado === 'Cumplida') return 'ganada';
+    if (resultado === 'No cumplida') return 'perdida';
     if (estado === 'cerrada') return 'cerrada';
+    if (apostada) return 'apostada';
     return '';
+}
+
+function getBadgeClase(estado, apostada, resultado) {
+    if (resultado === 'Cumplida') return 'badge-ganada';
+    if (resultado === 'No cumplida') return 'badge-perdida';
+    if (estado === 'cerrada') return 'badge-cerrada';
+    if (apostada) return 'badge-apostada';
+    return 'badge-activa';
 }
 
 function getResultadoClase(resultado) {
@@ -56,19 +68,28 @@ function getResultadoClase(resultado) {
     return '';
 }
 
-function createCard(apuesta) {
-    const card = document.createElement('div');
-    card.className = `card ${getEstadoClase(apuesta.estado)}`;
-    card.dataset.id = apuesta.id;
-    card.onclick = () => openModal(apuesta);
-
-    const estadoClase = apuesta.estado === 'cerrada' ? 'badge-cerrada' : 'badge-activa';
-    const resultadoClase = getResultadoClase(apuesta.resultado);
-
-    let badgesHTML = `<span class="badge ${estadoClase}">${getEstadoTexto(apuesta.estado)}</span>`;
-    if (apuesta.resultado && apuesta.resultado.trim()) {
-        badgesHTML += `<span class="badge ${resultadoClase}">Resultado: ${apuesta.resultado}</span>`;
+function getCorreo(apostador) {
+    if (!apostador) return '';
+    if (apostador.datos && typeof apostador.datos === 'object') {
+        return apostador.datos.correo || '';
     }
+    return '';
+}
+
+function createCard(apuesta, idsHechas) {
+    const apostada = idsHechas && idsHechas.includes(apuesta.id);
+    const estaCerrada = apuesta.estado === 'cerrada';
+    const card = document.createElement('div');
+    card.className = `card ${getEstadoClase(apuesta.estado, apostada, apuesta.resultado)}`;
+    card.dataset.id = apuesta.id;
+    if (!apostada && !estaCerrada && apuesta.estado === 'activa') {
+        card.onclick = () => openModal(apuesta, idsHechas);
+    }
+
+    const estadoClase = getEstadoClase(apuesta.estado, apostada, apuesta.resultado);
+    const badgeClase = getBadgeClase(apuesta.estado, apostada, apuesta.resultado);
+
+    let badgesHTML = `<span class="badge ${badgeClase}">${getEstadoTexto(apuesta.estado, apostada, apuesta.resultado)}</span>`;
 
     card.innerHTML = `
         <div class="card-header">
@@ -82,12 +103,12 @@ function createCard(apuesta) {
         </div>
         <div class="tiles">
             <div class="tile">
-                <div class="tile-caption">Monto Máximo</div>
+                <div class="tile-caption">Valor Apuesta</div>
                 <div class="tile-value">${formatPeso(apuesta.monto_maximo)}</div>
             </div>
             <div class="tile">
-                <div class="tile-caption">Multiplicador</div>
-                <div class="tile-value">x${apuesta.multiplicador}</div>
+                <div class="tile-caption">Ganancia</div>
+                <div class="tile-value">${escapeHtml(apuesta.ganancia || '')}</div>
             </div>
         </div>
     `;
@@ -101,7 +122,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function renderCards() {
+function renderCards(idsHechas) {
     const container = document.getElementById('cards');
     container.innerHTML = '';
 
@@ -115,7 +136,7 @@ function renderCards() {
     }
 
     apuestasData.forEach(apuesta => {
-        const card = createCard(apuesta);
+        const card = createCard(apuesta, idsHechas);
         const existing = container.querySelector(`[data-id="${apuesta.id}"]`);
         if (existing) {
             existing.replaceWith(card);
@@ -149,29 +170,25 @@ async function cargarIdsApuestasHechas() {
 async function loadApuestas() {
     try {
         const idsHechas = await cargarIdsApuestasHechas();
-        
+
         const { data, error } = await sb
             .from('apuesta')
             .select('*')
-            .eq('estado', 'activa')
             .order('fecha_creacion', { ascending: false });
 
         if (error) throw error;
 
         let nuevasApuestas = (data || []).filter(a => esHoy(a.fecha_creacion));
-        
-        if (idsHechas.length > 0) {
-            nuevasApuestas = nuevasApuestas.filter(a => !idsHechas.includes(a.id));
-        }
 
         const container = document.getElementById('cards');
         if (container.querySelector('.loading')) {
             container.innerHTML = '';
         }
 
-        if (JSON.stringify(nuevasApuestas) !== JSON.stringify(apuestasData)) {
+        if (JSON.stringify(nuevasApuestas) !== JSON.stringify(apuestasData) || JSON.stringify(idsHechas) !== JSON.stringify(idsHechasCache)) {
             apuestasData = nuevasApuestas;
-            renderCards();
+            idsHechasCache = idsHechas;
+            renderCards(idsHechas);
         }
     } catch (error) {
         console.error('Error cargando apuestas:', error);
@@ -187,9 +204,12 @@ async function loadApuestas() {
     }
 }
 
-function openModal(apuesta) {
+function openModal(apuesta, idsHechas) {
     if (apuesta.estado !== 'activa') {
-        alert('Esta apuesta ya no está disponible para jugar');
+        return;
+    }
+
+    if (idsHechas && idsHechas.includes(apuesta.id)) {
         return;
     }
 
@@ -206,46 +226,30 @@ function openModal(apuesta) {
             <div class="value">${escapeHtml(apuesta.juego)}</div>
         </div>
         <div class="modal-field">
-            <label>Monto Máximo</label>
+            <label>Valor Apuesta</label>
             <div class="value">${formatPeso(apuesta.monto_maximo)}</div>
         </div>
         <div class="modal-field">
-            <label>Multiplicador</label>
-            <div class="value">x${apuesta.multiplicador}</div>
-        </div>
-        <div class="modal-field">
-            <label>Monto a Apostar</label>
-            <input type="number" id="montoApuesta" placeholder="Ingresa el monto a apostar" min="1000" step="1000" max="${apuesta.monto_maximo}">
-            <div class="hint">Monto mínimo: $1.000 · Máximo: ${formatPeso(apuesta.monto_maximo)}</div>
-        </div>
-        <div class="modal-field">
-            <label>Ganancia Posible</label>
-            <div class="value" id="gananciaPosible">$ 0</div>
+            <label>Ganancia</label>
+            <div class="value">${escapeHtml(apuesta.ganancia || '')}</div>
         </div>
         <div class="error-msg" id="errorMsg"></div>
     `;
     modalActions.innerHTML = `
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-        <button class="btn btn-primary" id="btnJugar" onclick="realizarApuesta(${apuesta.monto_maximo}, ${apuesta.multiplicador})">Jugar</button>
+        <button class="btn btn-primary" id="btnJugar" onclick="realizarApuesta()">Jugar</button>
     `;
 
-    const montoInput = document.getElementById('montoApuesta');
-    const gananciaEl = document.getElementById('gananciaPosible');
+    const btnJugar = document.getElementById('btnJugar');
 
-    montoInput.addEventListener('input', () => {
-        const monto = parseFloat(montoInput.value) || 0;
-        const ganancia = monto * apuesta.multiplicador;
-        gananciaEl.textContent = formatPeso(ganancia);
-    });
-
-    montoInput.addEventListener('keydown', (e) => {
+    btnJugar.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-            realizarApuesta(apuesta.monto_maximo, apuesta.multiplicador);
+            realizarApuesta();
         }
     });
 
     modal.classList.add('active');
-    setTimeout(() => montoInput.focus(), 100);
+    setTimeout(() => btnJugar.focus(), 100);
 }
 
 function closeModal() {
@@ -254,40 +258,43 @@ function closeModal() {
     currentApuesta = null;
 }
 
-function realizarApuesta(montoMaximo, multiplicador) {
-    const montoInput = document.getElementById('montoApuesta');
+function mostrarToastTemporal(mensaje) {
+    const existente = document.querySelector('.toast-temporal');
+    if (existente) {
+        existente.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast-temporal';
+    toast.textContent = mensaje;
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.remove();
+        }
+    }, 1200);
+}
+
+function realizarApuesta() {
     const errorMsg = document.getElementById('errorMsg');
     const btnJugar = document.getElementById('btnJugar');
 
-    const monto = parseFloat(montoInput.value);
-
-    if (!monto || monto <= 0) {
-        errorMsg.textContent = 'Ingresa un monto válido';
-        montoInput.focus();
-        return;
-    }
-
-    if (monto < 1000) {
-        errorMsg.textContent = 'El monto mínimo es $1.000';
-        montoInput.focus();
-        return;
-    }
-
-    if (monto > montoMaximo) {
-        errorMsg.textContent = `El monto no puede exceder ${formatPeso(montoMaximo)}`;
-        montoInput.focus();
+    if (!currentApuesta) {
         return;
     }
 
     btnJugar.disabled = true;
     btnJugar.textContent = 'Procesando...';
-    errorMsg.textContent = '';
+    if (errorMsg) errorMsg.textContent = '';
 
-    guardarApuesta(monto, multiplicador)
+    guardarApuesta()
         .then(() => {
-            alert(`¡Apuesta realizada con éxito!\n\nCliente: ${getNombreCompleto(apostadorActual)}\nApuesta: ${currentApuesta ? currentApuesta.apuesta : ''}\nMonto: ${formatPeso(monto)}\nGanancia posible: ${formatPeso(monto * multiplicador)}`);
             closeModal();
-            loadApuestas();
+            mostrarToastTemporal('Apuesta jugada');
+            setTimeout(() => {
+                loadApuestas();
+            }, 1200);
         })
         .catch((error) => {
             console.error('Error completo:', error);
@@ -302,7 +309,7 @@ function realizarApuesta(montoMaximo, multiplicador) {
         });
 }
 
-async function guardarApuesta(monto, multiplicador) {
+async function guardarApuesta() {
     if (!apostadorActual || !currentApuesta) {
         throw new Error('Sesión inválida. Recarga la página.');
     }
@@ -312,7 +319,8 @@ async function guardarApuesta(monto, multiplicador) {
 
         const clienteJson = {
             id_apostador: apostadorActual.id,
-            nombre: getNombreCompleto(apostadorActual)
+            nombre: getNombreCompleto(apostadorActual),
+            correo: getCorreo(apostadorActual)
         };
 
         const { data: existente, error: errorSelect } = await sb
@@ -335,7 +343,8 @@ async function guardarApuesta(monto, multiplicador) {
                 .update({
                     cliente: clienteJson,
                     juego_nombre: currentApuesta.juego,
-                    monto: monto,
+                    monto: currentApuesta.monto_maximo,
+                    ganancia: currentApuesta.ganancia || '',
                     nombre_apuesta: currentApuesta.apuesta
                 })
                 .eq('id_apuesta', currentApuesta.id);
@@ -351,7 +360,8 @@ async function guardarApuesta(monto, multiplicador) {
                 .insert({
                     cliente: clienteJson,
                     juego_nombre: currentApuesta.juego,
-                    monto: monto,
+                    monto: currentApuesta.monto_maximo,
+                    ganancia: currentApuesta.ganancia || '',
                     id_apuesta: currentApuesta.id,
                     nombre_apuesta: currentApuesta.apuesta
                 });
@@ -381,8 +391,9 @@ async function guardarApuesta(monto, multiplicador) {
         const participanteJson = {
             id_apostador: apostadorActual.id,
             nombre: getNombreCompleto(apostadorActual),
-            monto: monto,
-            ganancia: monto * multiplicador
+            correo: getCorreo(apostadorActual),
+            monto: currentApuesta.monto_maximo,
+            ganancia: currentApuesta.ganancia || ''
         };
 
         const indiceExistente = participantes.findIndex(p => p && p.id_apostador === apostadorActual.id);
@@ -411,37 +422,22 @@ async function guardarApuesta(monto, multiplicador) {
     }
 }
 
-function logout() {
+async function logout() {
     apostadorActual = null;
-    sessionStorage.removeItem(SESSION_KEY);
+    await cerrarSesion();
     window.location.href = 'index.html';
 }
 
-async function verificarSesion() {
-    const guardado = sessionStorage.getItem(SESSION_KEY);
-    if (!guardado) return false;
+async function verificarSesionLocal() {
+    const apostador = await verificarSesion();
 
-    try {
-        const apostador = JSON.parse(guardado);
-        
-        const { data, error } = await sb
-            .from('apostadores')
-            .select('*')
-            .eq('id', apostador.id)
-            .limit(1);
-
-        if (error || !data || data.length === 0) {
-            sessionStorage.removeItem(SESSION_KEY);
-            return false;
-        }
-
-        apostadorActual = data[0];
-        return true;
-    } catch (error) {
-        console.error('Error verificando sesión:', error);
-        sessionStorage.removeItem(SESSION_KEY);
+    if (!apostador) {
+        window.location.href = 'index.html';
         return false;
     }
+
+    apostadorActual = apostador;
+    return true;
 }
 
 document.getElementById('modal').addEventListener('click', (e) => {
@@ -476,38 +472,37 @@ function connectRealtime() {
 
             if (eventType === 'INSERT' && newRecord && newRecord.estado === 'activa' && esHoy(newRecord.fecha_creacion)) {
                 const idsHechas = await cargarIdsApuestasHechas();
-                if (!idsHechas.includes(newRecord.id)) {
-                    const exists = apuestasData.find(a => a.id === newRecord.id);
-                    if (!exists) {
-                        apuestasData.unshift(newRecord);
-                        renderCards();
-                    }
+                const exists = apuestasData.find(a => a.id === newRecord.id);
+                if (!exists) {
+                    apuestasData.unshift(newRecord);
+                    idsHechasCache = idsHechas;
+                    renderCards(idsHechas);
                 }
             } else if (eventType === 'UPDATE') {
                 const index = apuestasData.findIndex(a => a.id === newRecord.id);
                 if (index !== -1) {
-                    if (newRecord.estado !== 'activa') {
-                        apuestasData.splice(index, 1);
-                        renderCards();
-                    } else {
-                        apuestasData[index] = newRecord;
-                        renderCards();
-                    }
-                } else if (newRecord.estado === 'activa' && esHoy(newRecord.fecha_creacion)) {
+                    const estadoAnterior = apuestasData[index].estado;
+                    apuestasData[index] = newRecord;
                     const idsHechas = await cargarIdsApuestasHechas();
-                    if (!idsHechas.includes(newRecord.id)) {
-                        const exists = apuestasData.find(a => a.id === newRecord.id);
-                        if (!exists) {
-                            apuestasData.unshift(newRecord);
-                            renderCards();
-                        }
+                    idsHechasCache = idsHechas;
+                    renderCards(idsHechas);
+                    if (estadoAnterior === 'activa' && newRecord.estado === 'cerrada') {
+                        console.log('Apuesta cerrada en tiempo real:', newRecord.id);
+                    }
+                } else if (newRecord && esHoy(newRecord.fecha_creacion)) {
+                    const idsHechas = await cargarIdsApuestasHechas();
+                    const exists = apuestasData.find(a => a.id === newRecord.id);
+                    if (!exists) {
+                        apuestasData.unshift(newRecord);
+                        idsHechasCache = idsHechas;
+                        renderCards(idsHechas);
                     }
                 }
             } else if (eventType === 'DELETE') {
                 const index = apuestasData.findIndex(a => a.id === old.id);
                 if (index !== -1) {
                     apuestasData.splice(index, 1);
-                    renderCards();
+                    renderCards(idsHechasCache);
                 }
             }
         })
@@ -523,10 +518,9 @@ function connectRealtime() {
 }
 
 async function init() {
-    const tieneSesion = await verificarSesion();
-    
+    const tieneSesion = await verificarSesionLocal();
+
     if (!tieneSesion) {
-        window.location.href = 'index.html';
         return;
     }
 

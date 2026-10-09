@@ -1,55 +1,19 @@
-const SUPABASE_URL = 'https://qbazuxfrctslfecvhcgf.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_nYuymJruu67P9LMKihq81A_8LKBmbJo';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
-const SESSION_KEY = 'stadium_bets_apostador';
-
-async function verificarApostador(nombre, apellido) {
-    try {
-        const { data, error } = await sb
-            .from('apostadores')
-            .select('*')
-            .contains('nombre', { nombre: nombre, apellido: apellido })
-            .limit(1);
-
-        if (error) {
-            console.error('Error verificando apostador:', error);
-            return null;
-        }
-
-        if (data && data.length > 0) {
-            return data[0];
-        }
-
-        const { data: nuevo, error: errorInsert } = await sb
-            .from('apostadores')
-            .insert({ nombre: { nombre: nombre, apellido: apellido } })
-            .select()
-            .single();
-
-        if (errorInsert) {
-            console.error('Error creando apostador:', errorInsert);
-            return null;
-        }
-
-        return nuevo;
-    } catch (error) {
-        console.error('Error en verificarApostador:', error);
-        return null;
-    }
-}
-
 async function login() {
     const nombreInput = document.getElementById('loginNombre');
-    const apellidoInput = document.getElementById('loginApellido');
+    const correoInput = document.getElementById('loginCorreo');
     const loginHint = document.getElementById('loginHint');
     const btnLogin = document.getElementById('btnLogin');
 
-    const nombre = nombreInput.value.trim();
-    const apellido = apellidoInput.value.trim();
+    const nombreCompleto = nombreInput.value.trim();
+    const correo = correoInput.value.trim();
 
-    if (!nombre || !apellido) {
-        loginHint.textContent = 'Ingresa tu nombre y apellido';
+    if (!nombreCompleto || !correo) {
+        loginHint.textContent = 'Ingresa tu nombre completo y correo';
+        return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) {
+        loginHint.textContent = 'Ingresa un correo válido';
         return;
     }
 
@@ -57,25 +21,46 @@ async function login() {
     btnLogin.textContent = 'Entrando...';
     loginHint.textContent = '';
 
-    const apostador = await verificarApostador(nombre, apellido);
+    const apostador = await verificarApostador(nombreCompleto, correo);
 
-    if (!apostador) {
-        loginHint.textContent = 'Error al registrar. Intenta nuevamente.';
+    if (!apostador || apostador.error) {
+        loginHint.textContent = apostador && apostador.mensaje
+            ? apostador.mensaje
+            : 'Error al registrar. Intenta nuevamente.';
         btnLogin.disabled = false;
         btnLogin.textContent = 'Entrar';
         return;
     }
 
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(apostador));
-    btnLogin.disabled = false;
-    btnLogin.textContent = 'Entrar';
+    const resultado = await iniciarSesion(apostador);
+
+    if (!resultado || !resultado.ok) {
+        loginHint.textContent = resultado && resultado.mensaje
+            ? resultado.mensaje
+            : 'Error al iniciar sesión. Intenta nuevamente.';
+        btnLogin.disabled = false;
+        btnLogin.textContent = 'Entrar';
+        return;
+    }
+
     window.location.href = 'bets.html';
 }
 
-document.getElementById('btnLogin').addEventListener('click', login);
-document.getElementById('loginNombre').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') login();
-});
-document.getElementById('loginApellido').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') login();
-});
+async function init() {
+    const apostador = await verificarSesion();
+
+    if (apostador) {
+        window.location.href = 'bets.html';
+        return;
+    }
+
+    document.getElementById('btnLogin').addEventListener('click', login);
+    document.getElementById('loginNombre').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') login();
+    });
+    document.getElementById('loginCorreo').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') login();
+    });
+}
+
+init();
